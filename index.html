@@ -148,10 +148,16 @@ main{max-width:560px; margin:0 auto; padding:14px 14px calc(96px + env(safe-area
 /* statistici */
 .statgrid{display:grid; grid-template-columns:1fr 1fr; gap:8px}
 .stat{background:var(--paper); border-radius:12px; padding:11px; text-align:center}
-.stat b{display:block; font-size:22px; font-weight:800}
-.stat span{font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.4px}
+.stat{min-width:0; overflow:hidden}
+.stat b{display:block; font-size:22px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.stat span{font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.4px; display:block; overflow-wrap:anywhere}
 .tirbar{display:flex; height:26px; border-radius:8px; overflow:hidden; margin:10px 0 4px}
-.tirbar div{display:flex; align-items:center; justify-content:center; color:#fff; font-size:11.5px; font-weight:800; min-width:2px}
+.tirbar div{display:flex; align-items:center; justify-content:center; color:#fff; font-size:11.5px; font-weight:800; min-width:3px; overflow:hidden}
+.tirbar div span{white-space:nowrap; padding:0 2px}
+.tirlegend{display:flex; gap:8px; margin-top:6px; flex-wrap:wrap}
+.tirlegend div{display:flex; align-items:center; gap:5px; font-size:12px; color:var(--ink-soft)}
+.tirlegend i{width:11px; height:11px; border-radius:3px; flex:none}
+.tirlegend b{color:var(--ink); font-weight:800}
 .bars{display:flex; gap:10px; align-items:flex-end; height:120px; margin-top:12px}
 .bars .b{flex:1; display:flex; flex-direction:column; align-items:center; gap:5px}
 .bars .b i{width:100%; border-radius:8px 8px 0 0; background:var(--petrol); font-style:normal; display:flex; align-items:flex-start; justify-content:center; color:#fff; font-size:11.5px; font-weight:800; padding-top:3px}
@@ -253,7 +259,12 @@ main{max-width:560px; margin:0 auto; padding:14px 14px calc(96px + env(safe-area
       <h2>Setări</h2>
       <button class="mrow" onclick="shSettings()"><span class="ico">⚙️</span><span>Profil & ținte<small id="setSummary"></small></span></button>
     </div>
-    <p class="muted" style="padding:0 6px">GlucoLog este un jurnal personal. Estimările (inclusiv HbA1c) sunt orientative și nu înlocuiesc analizele de laborator sau recomandările medicului. Aplicația nu recomandă doze de insulină. · v1.4</p>
+    <div class="card">
+      <h2>Despre & informații legale</h2>
+      <button class="mrow" onclick="shAbout()"><span class="ico">ℹ️</span><span>Ce este (și ce nu este) GlucoLog<small>Citește înainte de utilizare</small></span></button>
+      <button class="mrow" onclick="shPrivacy()"><span class="ico">🔒</span><span>Confidențialitate<small>Unde îți sunt datele</small></span></button>
+    </div>
+    <p class="muted" style="padding:0 6px">GlucoLog v1.5 · Jurnal personal. Nu este un dispozitiv medical și nu oferă sfaturi medicale.</p>
   </section>
 </main>
 
@@ -325,6 +336,13 @@ function evOfDay(key){ return S.events.filter(e=>dKey(e.ts)===key); }
 function fmtHC(x){ return (Math.round(x*10)/10).toString().replace('.',','); }
 function median(a){ if(!a.length) return 0; const b=[...a].sort((x,y)=>x-y); const m=Math.floor(b.length/2);
   return b.length%2 ? b[m] : (b[m-1]+b[m])/2; }
+function rangeLabel(dailyVals, unit){
+  const v=dailyVals.filter(x=>x>0);
+  if(!v.length) return '—';
+  const mn=Math.min(...v), mx=Math.max(...v), md=Math.round(median(v));
+  if(mn===mx) return mn+(unit||'');
+  return mn+'–'+mx+(unit||'')+' · tipic '+md;
+}
 function histLastDose(name){
   for(let i=S.events.length-1;i>=0;i--){ const e=S.events[i];
     if(e.type==='ins'&&e.ins.name===name) return e.ins.u; }
@@ -743,13 +761,17 @@ function renderStats(){
   const cEvs=S.events.filter(e=>e.ts>=todayStart-PERIOD*MS_D && e.ts<todayStart);
   const cDays=new Set(cEvs.map(e=>dKey(e.ts))).size||1;
   const cIns=cEvs.filter(e=>e.type==='ins');
-  const bolU=cIns.filter(e=>e.ins.kind!=='bazala').reduce((a,e)=>a+e.ins.u,0);
-  const bolMeals=cIns.filter(e=>e.ins.kind==='bolus');
-  const mealAvg=bolMeals.length? bolMeals.reduce((a,e)=>a+e.ins.u,0)/bolMeals.length : 0;
-  const corr=cIns.filter(e=>e.ins.kind==='corectie');
-  const bazByDay={}; cIns.filter(e=>e.ins.kind==='bazala').forEach(e=>{ const k=dKey(e.ts); bazByDay[k]=(bazByDay[k]||0)+e.ins.u; });
+  // agregăm PE ZI, apoi arătăm intervalul (min–max, tipic mediană) — evită falsa precizie a mediilor
+  const rapidByDay={}, bazByDay={}, corrByDay={}, hcByDay={};
+  cEvs.forEach(e=>{ const k=dKey(e.ts);
+    if(e.type==='ins'){ if(e.ins.kind==='bazala') bazByDay[k]=(bazByDay[k]||0)+e.ins.u;
+      else { rapidByDay[k]=(rapidByDay[k]||0)+e.ins.u; if(e.ins.kind==='corectie') corrByDay[k]=(corrByDay[k]||0)+1; } }
+    if(e.type==='meal') hcByDay[k]=(hcByDay[k]||0)+(e.meal.hc||0);
+  });
+  const dayKeys=[...new Set(cEvs.map(e=>dKey(e.ts)))];
+  const arr=o=>dayKeys.map(k=>o[k]||0);
+  const bolMeals=cIns.filter(e=>e.ins.kind==='bolus').map(e=>e.ins.u);
   const bazTip=median(Object.values(bazByDay));
-  const hcAll=cEvs.filter(e=>e.type==='meal').reduce((a,e)=>a+(e.meal.hc||0),0);
   $('statsbody').innerHTML=`
     <div class="card"><h2>Glicemie · ultimele ${PERIOD} zile</h2>
       <div class="statgrid">
@@ -762,25 +784,29 @@ function renderStats(){
     </div>
     <div class="card"><h2>Timp în țintă (${s.low}–${s.high})</h2>
       <div class="tirbar">
-        ${pl?`<div style="flex:${pl};background:var(--low)">${pl}%</div>`:''}
-        ${pi?`<div style="flex:${pi};background:var(--ok)">${pi}%</div>`:''}
-        ${ph?`<div style="flex:${ph};background:var(--high)">${ph}%</div>`:''}
+        ${pl?`<div style="flex:${pl};background:var(--low)">${pl>=12?'<span>'+pl+'%</span>':''}</div>`:''}
+        ${pi?`<div style="flex:${pi};background:var(--ok)">${pi>=12?'<span>'+pi+'%</span>':''}</div>`:''}
+        ${ph?`<div style="flex:${ph};background:var(--high)">${ph>=12?'<span>'+ph+'%</span>':''}</div>`:''}
       </div>
-      <div class="spread muted"><span>sub țintă</span><span>în țintă</span><span>peste</span></div>
+      <div class="tirlegend">
+        <div><i style="background:var(--low)"></i>sub țintă <b>${pl}%</b></div>
+        <div><i style="background:var(--ok)"></i>în țintă <b>${pi}%</b></div>
+        <div><i style="background:var(--high)"></i>peste <b>${ph}%</b></div>
+      </div>
     </div>
     <div class="card"><h2>Media pe momente ale zilei</h2>
       <div class="bars">${byPart.map(b=>`<div class="b"><i style="height:${Math.round(b.avg/maxAvg*100)}%; background:${b.avg?rangeColor(b.avg):'var(--line)'}">${b.avg||''}</i><span>${short[b.p]}</span></div>`).join('')}</div>
     </div>
     <div class="card"><h2>Insulină & mese</h2>
       <div class="statgrid">
-        <div class="stat"><b class="num">${Math.round(bolU/cDays*10)/10}</b><span>rapidă U / zi</span></div>
-        <div class="stat"><b class="num">${Math.round(mealAvg*10)/10}</b><span>rapidă U / masă</span></div>
-        <div class="stat"><b class="num">${bazTip||'—'}</b><span>bazală U / zi</span></div>
-        <div class="stat"><b class="num">${Math.round(corr.length/cDays*10)/10}</b><span>corecții / zi</span></div>
-        <div class="stat"><b class="num">${Math.round(hcAll/cDays)}</b><span>HC / zi</span></div>
+        <div class="stat"><b class="num" style="font-size:17px">${rangeLabel(arr(rapidByDay),'U')}</b><span>rapidă / zi</span></div>
+        <div class="stat"><b class="num" style="font-size:17px">${rangeLabel(Object.values(bazByDay),'U')}</b><span>bazală / zi</span></div>
+        <div class="stat"><b class="num" style="font-size:17px">${rangeLabel(bolMeals,'U')}</b><span>rapidă / masă</span></div>
+        <div class="stat"><b class="num" style="font-size:17px">${rangeLabel(arr(corrByDay),'')}</b><span>corecții / zi</span></div>
+        <div class="stat"><b class="num" style="font-size:17px">${rangeLabel(arr(hcByDay),'')}</b><span>HC / zi</span></div>
         <div class="stat"><b class="num">${cDays}</b><span>zile complete</span></div>
       </div>
-      <p class="muted" style="margin:10px 0 0">Calculate pe ultimele ${PERIOD} zile complete — ziua de azi, fiind în desfășurare, nu intră în aceste medii. Bazala este doza zilnică tipică (mediană), nu o medie diluată de zilele nenotate.</p>
+      <p class="muted" style="margin:10px 0 0">Interval pe ultimele ${PERIOD} zile complete (ziua de azi, în curs, e exclusă), afișat ca minim–maxim · tipic = valoarea mediană. Reflectă variația reală, nu o medie cu falsă precizie.</p>
     </div>`;
 }
 </script>
@@ -943,12 +969,14 @@ function doReport(days, detailed){
   const cEvs=S.events.filter(e=>e.ts>=todayStart-days*MS_D && e.ts<todayStart);
   const cDays=new Set(cEvs.map(e=>dKey(e.ts))).size||1;
   const cIns=cEvs.filter(e=>e.type==='ins');
-  const bolU=cIns.filter(e=>e.ins.kind!=='bazala').reduce((a,e)=>a+e.ins.u,0);
-  const bolMeals=cIns.filter(e=>e.ins.kind==='bolus');
-  const mealAvg=bolMeals.length? bolMeals.reduce((a,e)=>a+e.ins.u,0)/bolMeals.length : 0;
-  const corrEv=cIns.filter(e=>e.ins.kind==='corectie');
-  const corrU=corrEv.reduce((a,e)=>a+e.ins.u,0);
-  const bazByDay={}; cIns.filter(e=>e.ins.kind==='bazala').forEach(e=>{ const k=dKey(e.ts); bazByDay[k]=(bazByDay[k]||0)+e.ins.u; });
+  const rapidByDay={}, bazByDay={}, corrByDay={}, hcByDay={};
+  cEvs.forEach(e=>{ const k=dKey(e.ts);
+    if(e.type==='ins'){ if(e.ins.kind==='bazala') bazByDay[k]=(bazByDay[k]||0)+e.ins.u;
+      else { rapidByDay[k]=(rapidByDay[k]||0)+e.ins.u; if(e.ins.kind==='corectie') corrByDay[k]=(corrByDay[k]||0)+1; } }
+    if(e.type==='meal') hcByDay[k]=(hcByDay[k]||0)+(e.meal.hc||0); });
+  const dk=[...new Set(cEvs.map(e=>dKey(e.ts)))];
+  const arr=o=>dk.map(k=>o[k]||0);
+  const bolMeals=cIns.filter(e=>e.ins.kind==='bolus').map(e=>e.ins.u);
   const bazTip=median(Object.values(bazByDay));
   const hcAll=cEvs.filter(e=>e.type==='meal').reduce((a,e)=>a+(e.meal.hc||0),0);
   // evoluție pe săptămâni (≤35 zile) sau pe luni
@@ -1004,9 +1032,10 @@ function doReport(days, detailed){
     <table><tr><th>${byWeek?'Săptămâna':'Luna'}</th><th>Medie</th><th>A1c est.</th><th>În țintă</th><th>Hipo</th><th>Corecții</th><th>Rapidă/zi</th><th>Bazală/zi</th><th>Măsurători</th></tr>${trendRows}</table>
     <h2>Glicemii pe momente ale zilei</h2>
     <table><tr><th>Moment</th><th>Medie</th><th>Min</th><th>Max</th><th>Nr.</th></tr>${rowsPart}</table>
-    <h2>Insulină și mese — medii pe zile complete (ziua curentă exclusă)</h2>
-    <table><tr><th>Rapidă / masă (medie)</th><th>Rapidă / zi (total)</th><th>Corecții / zi</th><th>Bazală / zi (doza zilnică)</th><th>HC / zi</th></tr>
-    <tr><td>${mealAvg.toFixed(1)} U</td><td>${(bolU/cDays).toFixed(1)} U</td><td>${(corrEv.length/cDays).toFixed(1)} (${(corrU/cDays).toFixed(1)} U)</td><td>${bazTip||'—'} U</td><td>${Math.round(hcAll/cDays)}</td></tr></table>
+    <h2>Insulină și mese — interval pe zile complete (ziua curentă exclusă)</h2>
+    <table><tr><th>Rapidă / zi</th><th>Rapidă / masă</th><th>Corecții / zi</th><th>Bazală / zi</th><th>HC / zi</th></tr>
+    <tr><td>${rangeLabel(arr(rapidByDay),' U')}</td><td>${rangeLabel(bolMeals,' U')}</td><td>${rangeLabel(arr(corrByDay),'')}</td><td>${rangeLabel(Object.values(bazByDay),' U')}</td><td>${rangeLabel(arr(hcByDay),'')}</td></tr></table>
+    <p style="color:#444">Valorile sunt interval minim–maxim pe ${cDays} zile complete; „tipic" = mediana. Doza zilnică de bazală și dozele la masă se citesc astfel mai fidel decât ca medie unică.</p>
     ${kg.length?`<h2>Greutate</h2><p>${kg[0].kg.v} kg (${dNice(kg[0].ts)}) → ${kg[kg.length-1].kg.v} kg (${dNice(kg[kg.length-1].ts)})</p>`:''}
     <p>*HbA1c estimat din media măsurătorilor capilare (formula ADA eAG→A1c) — tendință orientativă, nu înlocuiește dozarea de laborator.</p>
     ${journal}`;
@@ -1051,6 +1080,23 @@ function shSettings(first){
     ${first?'<p class="muted" style="margin-top:10px">Datele rămân doar pe acest telefon. Aplicația îți va aminti săptămânal să faci un backup.</p>':''}`);
   chipify('ssrc'); chipify('stheme');
 }
+function shConsent(){
+  openSheet(`<h3>Bine ai venit la GlucoLog</h3>
+    <p>GlucoLog este un <b>jurnal personal</b> pentru diabet: notezi tu glicemiile, mesele și insulina, iar aplicația ți le organizează și rezumă.</p>
+    <p style="margin-top:10px"><b>Important, înainte de a începe:</b></p>
+    <ul style="margin:6px 0 0 18px; padding:0; line-height:1.6">
+      <li>Nu este un dispozitiv medical și nu oferă sfaturi medicale.</li>
+      <li>Nu calculează și nu recomandă doze de insulină.</li>
+      <li>Nu înlocuiește medicul, glucometrul sau analizele.</li>
+      <li>Deciziile de tratament se iau doar cu medicul tău. Urgențe: 112.</li>
+    </ul>
+    <p class="muted" style="margin-top:10px">Datele rămân doar pe telefonul tău. Aplicația e oferită „ca atare", fără garanții.</p>
+    <button class="btn btn-p" onclick="acceptConsent()">Am înțeles și continui</button>`);
+}
+function acceptConsent(){
+  S.settings.accepted=Date.now(); save(); closeSheet();
+  if(!S.settings.name) shSettings(true);
+}
 function applyTheme(){
   const pref=S.settings.theme||'auto';
   const dark = pref==='dark' || (pref==='auto' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -1068,6 +1114,29 @@ function okSettings(first){
   applyTheme();
   if(first && !s.lastBackup) s.lastBackup=Date.now();
   save(); closeSheet(); renderToday(); renderMore(); if(first) toast('Gata de folosit!');
+}
+function shAbout(){
+  openSheet(`<h3>Ce este GlucoLog</h3>
+    <p>GlucoLog este un <b>jurnal personal</b> pentru notarea glicemiilor, meselor, dozelor de insulină și a altor observații, cu grafice și rezumate ale datelor pe care <b>tu</b> le introduci.</p>
+    <p style="margin-top:10px"><b>Ce NU este:</b></p>
+    <ul style="margin:6px 0 0 18px; padding:0; line-height:1.6">
+      <li>Nu este un dispozitiv medical.</li>
+      <li>Nu oferă sfaturi, diagnostice sau recomandări medicale.</li>
+      <li>Nu calculează și nu sugerează doze de insulină.</li>
+      <li>Nu înlocuiește glucometrul, senzorul, analizele de laborator sau medicul.</li>
+    </ul>
+    <p style="margin-top:10px">Cifrele afișate (medii, intervale, HbA1c estimat) sunt <b>rezumate descriptive</b> ale datelor tale, cu rol pur informativ. HbA1c estimat este o aproximare statistică din glicemiile introduse și poate diferi semnificativ de analiza de laborator.</p>
+    <p style="margin-top:10px"><b>Deciziile privind tratamentul, inclusiv dozele de insulină, se iau exclusiv împreună cu medicul tău.</b> În caz de urgență medicală, sună la 112.</p>
+    <p class="muted" style="margin-top:10px">Autorul pune la dispoziție această aplicație „ca atare", fără garanții, și nu își asumă răspunderea pentru decizii luate pe baza ei.</p>
+    <button class="btn btn-g" onclick="closeSheet()">Am înțeles</button>`);
+}
+function shPrivacy(){
+  openSheet(`<h3>Confidențialitate</h3>
+    <p>Toate datele tale (glicemii, mese, insulină, note) sunt stocate <b>exclusiv pe acest dispozitiv</b>, în memoria locală a aplicației.</p>
+    <p style="margin-top:10px">GlucoLog <b>nu trimite nicio informație</b> către niciun server, autor sau terț. Nu există conturi, nu există urmărire, nu există publicitate. Funcționează complet offline.</p>
+    <p style="margin-top:10px">Backupurile (fișierele .json/.csv) și rapoartele pentru medic sunt generate local și partajate <b>doar de tine</b>, unde alegi tu (ex. Google Drive). Ai control complet asupra lor.</p>
+    <p style="margin-top:10px">Dacă dezinstalezi aplicația sau ștergi datele browserului, informațiile se pierd — de aceea backupul periodic e recomandat.</p>
+    <button class="btn btn-g" onclick="closeSheet()">Închide</button>`);
 }
 function renderMore(){
   const s=S.settings;
@@ -1088,7 +1157,8 @@ function bannerCheck(){
 sortEv();
 applyTheme();
 renderToday(); renderMore(); bannerCheck();
-if(!S.settings.name) shSettings(true);
+if(!S.settings.accepted){ shConsent(); }
+else if(!S.settings.name) shSettings(true);
 if('serviceWorker' in navigator && location.protocol==='https:'){
   navigator.serviceWorker.register('./sw.js').catch(()=>{});
 }
